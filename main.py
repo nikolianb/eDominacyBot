@@ -8,7 +8,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.service import Service
 
 def create_database():
-    conn = sqlite3.connect('user_activities.db')
+    conn = sqlite3.connect('database/user_activities.db')
     c = conn.cursor()
     c.execute('''
         CREATE TABLE IF NOT EXISTS activities (
@@ -75,7 +75,7 @@ def login(account, day):
 
     time.sleep(5)
 
-    save_page_source(driver, "logged_in.html")  # Save the page source for debugging
+    # save_page_source(driver, "logged_in.html")  # Save the page source for debugging
 
     user_id = account["email"]
 
@@ -99,7 +99,7 @@ def login(account, day):
     driver.quit()
 
 def user_has_activity(user_id, day):
-    conn = sqlite3.connect('user_activities.db')
+    conn = sqlite3.connect('database/user_activities.db')
     c = conn.cursor()
     c.execute('SELECT 1 FROM activities WHERE user_id = ? AND day = ?', (user_id, day))
     exists = c.fetchone() is not None
@@ -107,14 +107,14 @@ def user_has_activity(user_id, day):
     return exists
 
 def update_user_activity(user_id, day):
-    conn = sqlite3.connect('user_activities.db')
+    conn = sqlite3.connect('database/user_activities.db')
     c = conn.cursor()
     c.execute('INSERT OR REPLACE INTO activities (user_id, day, has_worked, has_rested, has_worked_twice, has_trained) VALUES (?, ?, 0, 0, 0, 0)', (user_id, day))
     conn.commit()
     conn.close()
 
 def user_has_done_action(user_id, action):
-    conn = sqlite3.connect('user_activities.db')
+    conn = sqlite3.connect('database/user_activities.db')
     c = conn.cursor()
     c.execute(f'SELECT {action} FROM activities WHERE user_id = ?', (user_id,))
     result = c.fetchone()
@@ -122,7 +122,7 @@ def user_has_done_action(user_id, action):
     return result and result[0] == 1
 
 def set_user_action_done(user_id, action):
-    conn = sqlite3.connect('user_activities.db')
+    conn = sqlite3.connect('database/user_activities.db')
     c = conn.cursor()
     c.execute(f'UPDATE activities SET {action} = 1 WHERE user_id = ?', (user_id,))
     conn.commit()
