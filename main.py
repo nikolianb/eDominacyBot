@@ -7,6 +7,23 @@ from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.service import Service
 
+def create_database():
+    conn = sqlite3.connect('user_activities.db')
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS activities (
+            user_id TEXT PRIMARY KEY,
+            day INTEGER,
+            has_worked INTEGER,
+            has_rested INTEGER,
+            has_worked_twice INTEGER,
+            has_trained INTEGER
+        )
+    ''')
+    conn.commit()
+    conn.close()
+    print("Database and table created if not exists.")
+
 def load_accounts(file_path):
     with open(file_path, 'r') as file:
         return json.load(file)
@@ -18,7 +35,28 @@ def setup_driver(proxy=None):
     service = Service(ChromeDriverManager().install())
     return webdriver.Chrome(service=service, options=chrome_options)
 
-def login(account):
+def save_page_source(driver, file_name):
+    with open(file_name, "w", encoding="utf-8") as file:
+        file.write(driver.page_source)
+
+def extract_day_from_index(driver):
+    driver.get("https://www.edominacy.com/en/index")
+    time.sleep(5)
+    # save_page_source(driver, "index.html")  # Save the page source for debugging
+
+    try:
+        day_element = driver.find_element(By.XPATH, "//div[@class='vs596-1']/span[contains(text(), 'Day')]")
+        day_text = day_element.text.strip()
+        print(f"Day text found: '{day_text}'")  # Debugging statement
+        if not day_text:
+            raise ValueError("Day text is empty")
+        day_number = int(day_text.split()[1])
+        return day_number
+    except Exception as e:
+        print(f"An error occurred while getting the current day: {e}")
+        raise
+
+def login(account, day):
     driver = setup_driver(account.get("proxy"))
     driver.get("https://www.edominacy.com/en/login")
 
@@ -37,24 +75,28 @@ def login(account):
 
     time.sleep(5)
 
-    day = get_current_day(driver)
+    save_page_source(driver, "logged_in.html")  # Save the page source for debugging
+
     user_id = account["email"]
+
+    print(f"Logged in as {user_id}.")
+    print(f"Current day: {day}")
 
     if not user_has_activity(user_id, day):
         update_user_activity(user_id, day)
+        print(f"Activity initialized for user {user_id} on day {day}.")
 
     if not user_has_done_action(user_id, 'has_worked'):
         work(driver, user_id)
+    else:
+        print(f"User {user_id} has already worked today.")
+
     if not user_has_done_action(user_id, 'has_trained'):
         train(driver, user_id)
+    else:
+        print(f"User {user_id} has already trained today.")
 
     driver.quit()
-
-def get_current_day(driver):
-    day_element = driver.find_element(By.CSS_SELECTOR, ".nav-header .vs104-3")
-    day_text = day_element.text.strip()
-    day_number = int(day_text.split()[1])
-    return day_number
 
 def user_has_activity(user_id, day):
     conn = sqlite3.connect('user_activities.db')
@@ -85,25 +127,25 @@ def set_user_action_done(user_id, action):
     c.execute(f'UPDATE activities SET {action} = 1 WHERE user_id = ?', (user_id,))
     conn.commit()
     conn.close()
+    print(f"Set {action} for user {user_id}.")
 
 def work(driver, user_id):
     driver.get("https://www.edominacy.com/en/companies")
     time.sleep(5)
 
     try:
-        # Check and click either the rest button or the work button
         if click_button(driver, "button.buttonT.wHelperRest", "Rest button clicked"):
             set_user_action_done(user_id, 'has_rested')
-            driver.refresh()  # Refresh the page immediately after clicking the rest button
+            driver.refresh()
             print("Page refreshed after resting")
-            time.sleep(5)  # Wait for the page to refresh
+            time.sleep(5)
             if click_button(driver, "button.buttonT.wHelperWork", "Work button clicked again"):
                 set_user_action_done(user_id, 'has_worked_twice')
             else:
                 print("You have already worked for today after resting.")
         elif click_button(driver, "button.buttonT.wHelperWork", "Work button clicked"):
             set_user_action_done(user_id, 'has_worked')
-            time.sleep(5)  # Wait for the page to refresh after clicking the work button
+            time.sleep(5)
             calculate_days_left(driver)
         else:
             print("You have already worked for today.")
@@ -123,12 +165,9 @@ def click_button(driver, selector, success_message):
 
 def calculate_days_left(driver):
     try:
-        # Locate the parent div and get its title attribute
         parent_div = driver.find_element(By.CSS_SELECTOR, ".vs685")
         title_attribute = parent_div.get_attribute("title")
-        # print(f"Title of the parent div: {title_attribute}")
 
-        # Extract current and total days from the progress span
         progress_element = driver.find_element(By.CSS_SELECTOR, ".vs685-4")
         current_progress = progress_element.text.strip().split(" / ")
         current_days = int(current_progress[0])
@@ -151,29 +190,31 @@ def train(driver, user_id):
             train_button.click()
             print("Train button clicked.")
             set_user_action_done(user_id, 'has_trained')
-            time.sleep(5)  # Wait for the page to refresh after clicking the button
+            time.sleep(5)
             calculate_training_progress(driver)
     except Exception as e:
         print(f"An error occurred while training: {e}")
 
 def calculate_training_progress(driver):
     try:
-        # Locate the parent div and get its title attribute
         parent_div = driver.find_element(By.CSS_SELECTOR, ".vs685")
         title_attribute = parent_div.get_attribute("title")
 
-        # Extract current and total progress from the progress span
         progress_element = driver.find_element(By.CSS_SELECTOR, ".vs685-4")
         current_progress = progress_element.text.strip().split(" / ")
-        current_value = int(current_progress[0])
-        total_value = int(current_progress[1])
-        progress_left = total_value - current_value
+        current_days = int(current_progress[0])
+        total_days = int(current_progress[1])
+        days_left = total_days - current_days
 
-        print(f"{title_attribute}: {progress_left}")
+        print(f"{title_attribute}: {days_left}")
     except Exception as e:
-        print(f"An error occurred while calculating training progress: {e}")
+        print(f"An error occurred while calculating days left: {e}")
 
 if __name__ == "__main__":
-    accounts = load_accounts('accounts.json')
+    create_database()
+    accounts = load_accounts("accounts.json")
     for account in accounts:
-        login(account)
+        driver = setup_driver(account.get("proxy"))
+        day = extract_day_from_index(driver)
+        driver.quit()
+        login(account, day)
