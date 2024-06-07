@@ -12,7 +12,8 @@ def create_database():
     c = conn.cursor()
     c.execute('''
         CREATE TABLE IF NOT EXISTS activities (
-            user_id TEXT PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT,
             day INTEGER,
             has_worked INTEGER,
             has_rested INTEGER,
@@ -46,17 +47,16 @@ def setup_driver(proxy=None):
         "profile.default_content_setting_values.geolocation": 2,
         "profile.default_content_setting_values.cookies": 2,
         "profile.managed_default_content_settings.third_party_cookies": 2,
-        "profile.managed_default_content_settings.javascript": 1,
+        "profile.managed_default_content_setting_values.javascript": 1,
         "profile.managed_default_content_settings.plugins": 2,
-        "profile.managed_default_content_settings.popups": 2,
-        "profile.managed_default_content_settings.ads": 2,
+        "profile.managed_default_content_setting_values.popups": 2,
+        "profile.managed_default_content_setting_values.ads": 2,
     }
     chrome_options.add_experimental_option("prefs", prefs)
     chrome_options.add_argument("--log-level=3")
 
     service = Service(ChromeDriverManager().install())
     return webdriver.Chrome(service=service, options=chrome_options)
-
 
 def save_page_source(driver, file_name):
     with open(file_name, "w", encoding="utf-8") as file:
@@ -102,68 +102,10 @@ def login(account, day):
     print(f"Current day: {day}")
 
     if not user_has_activity(user_id, day):
-        update_user_activity(user_id, day)
+        add_user_activity(user_id, day)
         print(f"Activity initialized for user {user_id} on day {day}.")
 
-    driver.get("https://www.edominacy.com/en/companies")
-    time.sleep(5)
-
-    has_worked = user_has_done_action(user_id, 'has_worked')
-    has_rested = user_has_done_action(user_id, 'has_rested')
-    has_worked_twice = user_has_done_action(user_id, 'has_worked_twice')
-
-    print(f"User status: has_worked={has_worked}, has_rested={has_rested}, has_worked_twice={has_worked_twice}")
-
-    try:
-        if not has_rested:
-            try:
-                rest_button = driver.find_element(By.CSS_SELECTOR, "button.buttonT.wHelperRest")
-                rest_button_disabled = "disabled" in rest_button.get_attribute("class")
-
-                if not rest_button_disabled:
-                    rest_button.click()
-                    set_user_action_done(user_id, 'has_rested')
-                    print(f"Rest action recorded for user {user_id}.")
-                    time.sleep(5)
-                    driver.refresh()
-                    time.sleep(5)
-                else:
-                    print("Rest button is disabled.")
-            except Exception as e:
-                print(f"Rest button not found: {e}")
-
-        work_button_available = False
-        try:
-            work_button = driver.find_element(By.CSS_SELECTOR, "button.buttonT.wHelperWork")
-            work_button_disabled = "disabled" in work_button.get_attribute("class")
-            if not work_button_disabled:
-                work_button_available = True
-        except Exception as e:
-            print(f"Work button not found: {e}")
-
-        if not has_worked and work_button_available:
-            work_button.find_element(By.XPATH, "..").submit()
-            set_user_action_done(user_id, 'has_worked')
-            print(f"Work action recorded for user {user_id}.")
-            time.sleep(5)
-            driver.refresh()
-            time.sleep(5)
-        elif not has_rested and has_worked and work_button_available:
-            set_user_action_done(user_id, 'has_rested')
-            print(f"User {user_id} has rested manually, updating status.")
-            work_button.find_element(By.XPATH, "..").submit()
-            set_user_action_done(user_id, 'has_worked_twice')
-            print(f"Second work action recorded for user {user_id}.")
-        elif has_worked and has_rested and not has_worked_twice and work_button_available:
-            work_button.find_element(By.XPATH, "..").submit()
-            set_user_action_done(user_id, 'has_worked_twice')
-            print(f"Second work action recorded for user {user_id}.")
-        else:
-            print(f"User {user_id} has already worked twice today or work button not available.")
-
-        calculate_days_left(driver)
-    except Exception as e:
-        print(f"An error occurred: {e}")
+    work_and_rest_sequence(driver, user_id)
 
     if not user_has_done_action(user_id, 'has_trained'):
         train_performed = train(driver, user_id)
@@ -176,6 +118,102 @@ def login(account, day):
 
     driver.quit()
 
+def work_and_rest_sequence(driver, user_id):
+    driver.get("https://www.edominacy.com/en/companies")
+    time.sleep(5)
+
+    has_worked = user_has_done_action(user_id, 'has_worked')
+    has_rested = user_has_done_action(user_id, 'has_rested')
+    has_worked_twice = user_has_done_action(user_id, 'has_worked_twice')
+
+    print(f"User status: has_worked={has_worked}, has_rested={has_rested}, has_worked_twice={has_worked_twice}")
+
+    try:
+        # Work first if not already done
+        if not has_worked:
+            perform_work_action(driver, user_id, 'has_worked')
+
+        # Rest if not already done
+        if not has_rested:
+            perform_rest_action(driver, user_id)
+
+        # Work again if not already done twice
+        if has_worked and has_rested and not has_worked_twice:
+            perform_work_action(driver, user_id, 'has_worked_twice')
+
+        calculate_days_left(driver)
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+def perform_work_action(driver, user_id, action):
+    work_button = driver.find_element(By.CSS_SELECTOR, "button.buttonT.wHelperWork")
+    if "disabled" not in work_button.get_attribute("class"):
+        work_button.find_element(By.XPATH, "..").submit()
+        set_user_action_done(user_id, action)
+        print(f"Work action recorded for user {user_id} as {action}.")
+        time.sleep(5)
+        driver.refresh()
+        time.sleep(5)
+    else:
+        print(f"Work button not available for user {user_id}.")
+
+def perform_rest_action(driver, user_id):
+    rest_button = driver.find_element(By.CSS_SELECTOR, "button.buttonT.wHelperRest")
+    if "disabled" not in rest_button.get_attribute("class"):
+        rest_button.click()
+        set_user_action_done(user_id, 'has_rested')
+        print(f"Rest action recorded for user {user_id}.")
+        time.sleep(5)
+        driver.refresh()
+        time.sleep(5)
+    else:
+        print(f"Rest button not available for user {user_id}.")
+
+def user_has_activity(user_id, day):
+    conn = sqlite3.connect('database/user_activities.db')
+    c = conn.cursor()
+    c.execute('SELECT 1 FROM activities WHERE user_id = ? AND day = ?', (user_id, day))
+    exists = c.fetchone() is not None
+    conn.close()
+    return exists
+
+def add_user_activity(user_id, day):
+    conn = sqlite3.connect('database/user_activities.db')
+    c = conn.cursor()
+    c.execute('INSERT INTO activities (user_id, day, has_worked, has_rested, has_worked_twice, has_trained) VALUES (?, ?, 0, 0, 0, 0)', (user_id, day))
+    conn.commit()
+    conn.close()
+
+def user_has_done_action(user_id, action):
+    conn = sqlite3.connect('database/user_activities.db')
+    c = conn.cursor()
+    c.execute(f'SELECT {action} FROM activities WHERE user_id = ? ORDER BY day DESC LIMIT 1', (user_id,))
+    result = c.fetchone()
+    conn.close()
+    return result and result[0] == 1
+
+def set_user_action_done(user_id, action):
+    conn = sqlite3.connect('database/user_activities.db')
+    c = conn.cursor()
+    c.execute(f'UPDATE activities SET {action} = 1 WHERE user_id = ? AND day = (SELECT MAX(day) FROM activities WHERE user_id = ?)', (user_id, user_id))
+    conn.commit()
+    conn.close()
+    print(f"Set {action} for user {user_id}.")
+
+def calculate_days_left(driver):
+    try:
+        parent_div = driver.find_element(By.CSS_SELECTOR, ".vs685")
+        title_attribute = parent_div.get_attribute("title")
+
+        progress_element = driver.find_element(By.CSS_SELECTOR, ".vs685-4")
+        current_progress = progress_element.text.strip().split(" / ")
+        current_days = int(current_progress[0])
+        total_days = int(current_progress[1])
+        days_left = total_days - current_days
+
+        print(f"{title_attribute}: {days_left}")
+    except Exception as e:
+        print(f"An error occurred while calculating days left: {e}")
 
 def train(driver, user_id):
     driver.get("https://www.edominacy.com/en/training-grounds")
@@ -196,122 +234,6 @@ def train(driver, user_id):
         print(f"An error occurred while training: {e}")
 
     return train_performed
-
-
-def user_has_activity(user_id, day):
-    conn = sqlite3.connect('database/user_activities.db')
-    c = conn.cursor()
-    c.execute('SELECT 1 FROM activities WHERE user_id = ? AND day = ?', (user_id, day))
-    exists = c.fetchone() is not None
-    conn.close()
-    return exists
-
-def update_user_activity(user_id, day):
-    conn = sqlite3.connect('database/user_activities.db')
-    c = conn.cursor()
-    c.execute('INSERT OR REPLACE INTO activities (user_id, day, has_worked, has_rested, has_worked_twice, has_trained) VALUES (?, ?, 0, 0, 0, 0)', (user_id, day))
-    conn.commit()
-    conn.close()
-
-def user_has_done_action(user_id, action):
-    conn = sqlite3.connect('database/user_activities.db')
-    c = conn.cursor()
-    c.execute(f'SELECT {action} FROM activities WHERE user_id = ?', (user_id,))
-    result = c.fetchone()
-    conn.close()
-    return result and result[0] == 1
-
-def set_user_action_done(user_id, action):
-    conn = sqlite3.connect('database/user_activities.db')
-    c = conn.cursor()
-    c.execute(f'UPDATE activities SET {action} = 1 WHERE user_id = ?', (user_id,))
-    conn.commit()
-    conn.close()
-    print(f"Set {action} for user {user_id}.")
-
-def work(driver, user_id):
-    driver.get("https://www.edominacy.com/en/companies")
-    time.sleep(5)
-
-    try:
-        rest_button = driver.find_element(By.CSS_SELECTOR, "button.buttonT.wHelperRest")
-        work_button = driver.find_element(By.CSS_SELECTOR, "button.buttonT.wHelperWork")
-
-        rest_button_disabled = "disabled" in rest_button.get_attribute("class")
-        work_button_disabled = "disabled" in work_button.get_attribute("class")
-
-        if not rest_button_disabled:
-            rest_button.click()
-            set_user_action_done(user_id, 'has_rested')
-            print(f"Rest action recorded for user {user_id}.")
-            time.sleep(5)
-            driver.refresh()
-            time.sleep(5)
-            work_button = driver.find_element(By.CSS_SELECTOR, "button.buttonT.wHelperWork")
-            work_button_disabled = "disabled" in work_button.get_attribute("class")
-
-        if not work_button_disabled:
-            work_button.click()
-            set_user_action_done(user_id, 'has_worked')
-            print(f"Work action recorded for user {user_id}.")
-            calculate_days_left(driver)
-        else:
-            print(f"Work button not available for user {user_id}.")
-
-        # Check if we can rest and work again
-        rest_button = driver.find_element(By.CSS_SELECTOR, "button.buttonT.wHelperRest")
-        rest_button_disabled = "disabled" in rest_button.get_attribute("class")
-        if not rest_button_disabled:
-            rest_button.click()
-            set_user_action_done(user_id, 'has_rested')
-            print(f"Rest action recorded again for user {user_id}.")
-            time.sleep(5)
-            driver.refresh()
-            time.sleep(5)
-            work_button = driver.find_element(By.CSS_SELECTOR, "button.buttonT.wHelperWork")
-            work_button_disabled = "disabled" in work_button.get_attribute("class")
-            if not work_button_disabled:
-                work_button.click()
-                set_user_action_done(user_id, 'has_worked_twice')
-                print(f"Second work action recorded for user {user_id}.")
-                calculate_days_left(driver)
-            else:
-                print(f"Second work button not available for user {user_id}.")
-
-    except Exception as e:
-        print(f"An error occurred: {e}")
-
-def calculate_days_left(driver):
-    try:
-        parent_div = driver.find_element(By.CSS_SELECTOR, ".vs685")
-        title_attribute = parent_div.get_attribute("title")
-
-        progress_element = driver.find_element(By.CSS_SELECTOR, ".vs685-4")
-        current_progress = progress_element.text.strip().split(" / ")
-        current_days = int(current_progress[0])
-        total_days = int(current_progress[1])
-        days_left = total_days - current_days
-
-        print(f"{title_attribute}: {days_left}")
-    except Exception as e:
-        print(f"An error occurred while calculating days left: {e}")
-
-def train(driver, user_id):
-    driver.get("https://www.edominacy.com/en/training-grounds")
-    time.sleep(5)
-
-    try:
-        train_button = driver.find_element(By.CSS_SELECTOR, ".buttonT.wHelperTrain")
-        if "disabled" in train_button.get_attribute("class"):
-            print("You have already trained for today.")
-        else:
-            train_button.click()
-            print("Train button clicked.")
-            set_user_action_done(user_id, 'has_trained')
-            time.sleep(5)
-            calculate_training_progress(driver)
-    except Exception as e:
-        print(f"An error occurred while training: {e}")
 
 def calculate_training_progress(driver):
     try:
